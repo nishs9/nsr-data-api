@@ -1,0 +1,13 @@
+node_modules
+.env
+.env.local
+db/r2_secrets.py
+*.db
+db/.db_cache_info
+.git
+.gitignore
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json

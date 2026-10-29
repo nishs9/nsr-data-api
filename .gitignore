@@ -1,0 +1,13 @@
+__pycache__/
+player_stats_season/
+stats_player_week/
+*.db
+db/r2_secrets.py
+node_modules/
+.env*
+db/.db_cache_info
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
