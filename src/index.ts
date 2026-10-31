@@ -103,7 +103,7 @@ app.get('/api/power-rankings', async (req, res) => {
             `;
             
             const weekRankings = await db_conn.all(rankingsQuery, [week]);
-            return res.status(200).json(weekRankings);
+            return res.status(200).json({ rankings: weekRankings, week });
         } else {
             const rankingsQuery = `
                 SELECT 
@@ -123,7 +123,7 @@ app.get('/api/power-rankings', async (req, res) => {
             `;
             
             const latestRankings = await db_conn.all(rankingsQuery);
-            return res.status(200).json(latestRankings);
+            return res.status(200).json({ rankings: latestRankings });
         }
         
     } catch (error) {
