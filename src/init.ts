@@ -6,6 +6,7 @@ import sqlite3 from 'sqlite3';
 import { open, type Database } from 'sqlite';
 
 const DB_PATH = path.join(process.cwd(), 'db', 'nfl_stats.db');
+const TMP_DB_PATH = `${DB_PATH}.tmp`;
 const CACHE_FILE = path.join(process.cwd(), 'db', '.db_cache_info');
 
 let connectionPromise: Promise<Database> | undefined

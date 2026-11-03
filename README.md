@@ -27,6 +27,8 @@ docker run --rm --name nsr-data-api -p <-PORT->:<-PORT-> --env-file <local env f
 - [ ] Deploy the API to Railway
 - [ ] Test local nfl-stats-radar instance connected to hosted Data API instance
 - [ ] Test prod/PR instance of nfl-stats-radar with hosted Data API instance
+- [ ] Add request caching for popular players, teams, etc.
+- [ ] Setup the nfl-simulation-engine side of the backend
 
 ## License
 

@@ -1,5 +1,7 @@
 import express, { type Express, type Request, type Response } from 'express';
 import {initDb, getDbConn } from './init.ts';
+import { AVAILABLE_STATS, VALID_POSITIONS } from './utils/constants.ts';
+import type { ScatterPlotDataPoint, ScatterQueryResult } from './types/scatter-plot.ts';
 
 const port = process.env.PORT || 3000;
 const app: Express = express();
@@ -7,6 +9,7 @@ const app: Express = express();
 app.use(express.json());
 
 await initDb();
+// TODO: Get rid of this shared connection this is just temporary 
 const db_conn = await getDbConn();
 await db_conn.get('SELECT 1');
 
@@ -176,5 +179,113 @@ app.get('/api/power-rankings/historical', async (req, res) => {
         const errMsg = "Encountered an unexpected error while fetching historical RPI rankings!";
         console.error(errMsg, error);
         return res.status(500).json({ error: errMsg });
+    }
+});  
+
+app.get('/api/scatter-plot', async (req, res) => {
+    try {
+        const season = req.query.season;
+        const xStat = req.query.xStat;
+        const yStat = req.query.yStat;
+        let positions = req.query.positions;
+        if (positions === "undefined") {
+            positions = "QB";
+        }
+        console.log('req: ', req )
+        console.log("req.query: ", req.query)
+        console.log("raw inputs: ", req.query.season, req.query.xStat, req.query.yStat, req.query.positions);
+        console.log("inputs: ", season, xStat, yStat, positions);
+
+        // Check for all required parameters in query string and
+        // ensure they pass some simple validations
+        if (!season || !xStat || !yStat) {
+            const errMsg = "Missing one or more required parameters: {season, xStat, yStat}";
+            console.error(errMsg);
+            return res.status(400).json({error: errMsg});
+        }
+
+        if (isNaN(season) || season < 1999 || season > 2026) {
+            const errMsg = "Invalid season. Must be between 1999 and 2026"
+            console.error(errMsg);
+            return res.status(400).json({error: errMsg});
+        }
+
+        if (!AVAILABLE_STATS.includes(xStat) || !AVAILABLE_STATS.includes(yStat) ) {
+            const errMsg = "Invalid statistic passed in for at least one of the axes";
+            console.error(errMsg);
+            return res.status(400).json({error: errMsg});
+        }
+
+        // Make sure DB table exists + some prep tasks before we query
+        const tableName = `player_stats_season_${season}`;
+        const doesTableExist = await db_conn.get(
+            `SELECT name FROM sqlite_master WHERE type='table' AND name=?`,
+            [tableName]
+        );
+        if (!doesTableExist) {
+            const errMsg = `Data not available for the ${season}`;
+            console.error(errMsg);
+            return res.status(404).json({error: errMsg});
+        }
+
+        let selectedPositions: string[] = [];
+        if (positions) {
+            selectedPositions = positions.split(',').map(p => p.trim()).filter(p => p.length > 0);
+            const invalidPositions = selectedPositions.filter(p => !VALID_POSITIONS.includes(p));
+            console.log(selectedPositions, invalidPositions);
+            if (invalidPositions.length > 0) {
+                const errMsg = `Invalid positions passed in: ${invalidPositions.join(", ")}. 
+                                Valid positions are: ${VALID_POSITIONS.join(", ")}`;
+                console.error(errMsg);
+                res.status(400).json({error: errMsg});
+            }
+        }
+
+        // Prepare final query
+        let query = `
+            SELECT 
+                player_id,
+                player_display_name,
+                position,
+                recent_team,
+                ${xStat} as x_value,
+                ${yStat} as y_value
+            FROM ${tableName}
+            WHERE season_type = 'REG'
+                AND ${xStat} IS NOT NULL
+                AND ${yStat} IS NOT NULL
+                AND position IN ('QB', 'RB', 'WR', 'TE')
+        `
+        const queryParams: string[] = [];
+        if (selectedPositions.length > 0) {
+            const placeholders = selectedPositions.map(() => `?`).join(',');
+            query += ` AND position IN (${placeholders})`;
+            queryParams.push(...selectedPositions);
+        }
+        query += ` ORDER BY player_display_name`;
+        const scatterResults = await db_conn.all(query, queryParams);
+        const dataPoints: ScatterPlotDataPoint[] = (scatterResults as ScatterQueryResult[]).map((row) => ({
+            playerId: row.player_id,
+            playerName: row.player_display_name,
+            position: row.position,
+            team: row.recent_team,
+            xValue: row.x_value,
+            yValue: row.y_value,
+        }));
+
+        return res.status(200).json({
+            dataPoints,
+            metadata: {
+                season,
+                xStat,
+                yStat,
+                positions: selectedPositions.length > 0 ? selectedPositions : ['all'],
+                totalPoints: dataPoints.length,
+            },
+            availableStats: AVAILABLE_STATS,
+        });
+    } catch (error) {
+        console.error("Error in scatter plot API: ", error);
+        return res.status(500).json({error: "Internal server error"});
     }
 });

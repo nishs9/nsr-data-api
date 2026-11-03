@@ -11,3 +11,4 @@ db/.db_cache_info
 *.p12
 *.pfx
 credentials.json
+plans/
