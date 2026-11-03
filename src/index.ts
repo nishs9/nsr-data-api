@@ -184,10 +184,10 @@ app.get('/api/power-rankings/historical', async (req, res) => {
 
 app.get('/api/scatter-plot', async (req, res) => {
     try {
-        const season = req.query.season;
-        const xStat = req.query.xStat;
-        const yStat = req.query.yStat;
-        let positions = req.query.positions;
+        const season = Number(req.query.season);
+        const xStat = String(req.query.xStat);
+        const yStat = String(req.query.yStat);
+        let positions = String(req.query.positions);
         if (positions === "undefined") {
             positions = "QB";
         }
