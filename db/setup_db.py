@@ -129,7 +129,7 @@ def create_database_online(conn: sqlite3.Connection):
     base_url = 'https://github.com/nflverse/nflverse-data/releases/download/schedules/games.csv.gz'
     schedule_df = pd.read_csv(base_url, compression='gzip', low_memory=False)
     schedule_df = schedule_df[(schedule_df['season'] == 2026) & (schedule_df['game_type'] == "REG")]
-    max_week = 7
+    max_week = 8
 
     # Calculate historical RPI data for each team and add it to the DB
     historical_rpi_df = rpi_util.compute_historical_rpi(schedule_df, max_week)
@@ -199,8 +199,8 @@ def create_database(conn: sqlite3.Connection):
     print("Database setup complete!")
 
 if __name__ == "__main__":
-    # conn = sqlite3.connect('nfl_stats.db')
-    # create_database_online(conn)
-    # conn.commit()
-    # conn.close()
-    upload_db_to_r2()
+    conn = sqlite3.connect('nfl_stats.db')
+    create_database_online(conn)
+    conn.commit()
+    conn.close()
+    # upload_db_to_r2()

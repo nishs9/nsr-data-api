@@ -1,7 +1,8 @@
 import express, { type Express, type Request, type Response } from 'express';
 import {initDb, getDbConn } from './init.ts';
-import { AVAILABLE_STATS, VALID_POSITIONS } from './utils/constants.ts';
+import { AVAILABLE_STATS, VALID_POSITIONS, STAT_QUALIFIERS, MID_SEASON_STAT_QUALIFIERS } from './utils/constants.ts';
 import type { ScatterPlotDataPoint, ScatterQueryResult } from './types/scatter-plot.ts';
+import { getStatsForPosition, type StatDefinition } from "./types/player.js";
 
 const port = process.env.PORT || 3000;
 const app: Express = express();
@@ -287,5 +288,91 @@ app.get('/api/scatter-plot', async (req, res) => {
     } catch (error) {
         console.error("Error in scatter plot API: ", error);
         return res.status(500).json({error: "Internal server error"});
+    }
+});
+
+app.get('/api/stats/comparison', async(req, res) => {
+    try {
+        console.log(req.query);
+        const position = String(req.query.position);
+        const season = Number(req.query.season);
+        const statType = String(req.query.statType);
+        const playerId = req.query.playerId;
+
+        if (!position || !season || !statType) {
+            const errMsg = "Missing required parameters in payload";
+            console.error(errMsg);
+            return res.status(400).json({error:errMsg});
+        }
+
+        // Make sure DB table exists + some prep tasks before we query
+        const tableName = `player_stats_season_${season}`;
+        const doesTableExist = await db_conn.get(
+            `SELECT name FROM sqlite_master WHERE type='table' AND name=?`,
+            [tableName]
+        );
+        if (!doesTableExist) {
+            const errMsg = `Data not available for the ${season}`;
+            console.error(errMsg);
+            return res.status(404).json({error: errMsg});
+        }
+
+        // Validate that the requested statistic exists for the given season
+        // (needed because some stats like air yards and EPA don't appear in older data)
+        const tableInfo = await db_conn.all(`PRAGMA table_info(${tableName})`);
+        const validColumns = tableInfo.map(col => col.name);
+
+        if (!validColumns.includes(statType)) {
+            const errMsg = `Invalid stat type passed in: ${statType}`;
+            console.error(errMsg);
+            return res.status(400).json({error:errMsg});
+        }
+
+        // Get the requested stat's UI label + the correct stat qualifiers
+        const statDefinitions = getStatsForPosition(position);
+        const statDef = statDefinitions.find(def => def.key === statType);
+        const statLabel = statDef?.label || statType;
+        const qualifier = season === 2026 ? MID_SEASON_STAT_QUALIFIERS[position] : STAT_QUALIFIERS[position];
+
+        // Query to get the target player and qualifying players
+        const query = `
+            SELECT 
+                player_id, player_display_name, ${statType}
+            FROM ${tableName}
+            WHERE 
+                player_id = ? 
+                AND season_type = 'REG'
+            UNION
+            SELECT 
+                player_id, player_display_name, ${statType}
+            FROM ${tableName}
+            WHERE 
+                position = ? 
+                AND ${statType} IS NOT NULL 
+                AND season_type = 'REG'
+                AND ${qualifier}
+            ORDER BY ${statType} DESC
+        `;
+        const raw_players = await db_conn.all(query, [playerId, position]);
+        const ret_players = raw_players.map(player => ({
+            playerId: player.player_id,
+            name: player.player_display_name,
+            value: player[statType],
+        }));
+        return res.status(200).json(
+            {
+                players: ret_players,
+                metadata: {
+                    position,
+                    season,
+                    statType,
+                    statLabel,
+                },
+            }
+        );
+    } catch (error) {
+        const errMsg = "Unexpected error encountered while pulling up player stat comparison: " + error;
+        console.error(errMsg);
+        return res.status(500).json({error:errMsg});
     }
 });

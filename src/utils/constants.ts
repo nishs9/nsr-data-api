@@ -35,4 +35,18 @@ const AVAILABLE_STATS = [
 
   const VALID_POSITIONS = ["QB", "RB", "WR", "TE"];
 
-  export { AVAILABLE_STATS, VALID_POSITIONS };
+  const STAT_QUALIFIERS: Record<string, string> = {
+    'QB': "attempts > 150",
+    'RB': "carries > 100",
+    'WR': "receptions > 15",
+    'TE': "receptions > 15"
+  }
+
+  const MID_SEASON_STAT_QUALIFIERS: Record<string, string> = {
+    'QB': "attempts > 5",
+    'RB': "carries > 3",
+    'WR': "receptions > 2",
+    'TE': "receptions > 2"
+  }
+
+  export { AVAILABLE_STATS, VALID_POSITIONS, STAT_QUALIFIERS, MID_SEASON_STAT_QUALIFIERS };
