@@ -2,7 +2,8 @@ import express, { type Express, type Request, type Response } from 'express';
 import {initDb, getDbConn } from './init.ts';
 import { AVAILABLE_STATS, VALID_POSITIONS, STAT_QUALIFIERS, MID_SEASON_STAT_QUALIFIERS } from './utils/constants.ts';
 import type { ScatterPlotDataPoint, ScatterQueryResult } from './types/scatter-plot.ts';
-import { getStatsForPosition, type StatDefinition } from "./types/player.js";
+import { getStatsForPosition, getStatsForPositionPercentile } from "./types/player.js";
+import { calculatePercentiles } from './utils/helpers.ts';
 
 const port = process.env.PORT || 3000;
 const app: Express = express();
@@ -371,7 +372,130 @@ app.get('/api/stats/comparison', async(req, res) => {
             }
         );
     } catch (error) {
-        const errMsg = "Unexpected error encountered while pulling up player stat comparison: " + error;
+        const errMsg = "Unexpected error encountered while fetching player stat comparison: " + error;
+        console.error(errMsg);
+        return res.status(500).json({error:errMsg});
+    }
+});
+
+app.get('/api/player/:playerId', async (req, res) => {
+    try {
+        const playerId = req.params.playerId;
+        let season = Number(req.query.season);
+
+        if (!playerId) {
+            const errMsg = "Player ID is a required parameter!"
+            console.error(errMsg);
+            return res.status(400).json({error:errMsg});
+        }
+
+        if (season && (season > 2026 || season < 1999)) {
+            const errMsg = "Season should be between 1999-2026. Not: " + season;
+            console.error(errMsg);
+            return res.status(400).json({error:errMsg});
+        }
+
+        const years = Array.from({ length: 2026 - 1999 + 1 }, (_, i) => 2026 - i);
+        const playerInfoUnionQueries = years.map( (year) => { 
+                return `
+                    SELECT 
+                        player_id, player_display_name, 
+                        position, recent_team, headshot_url, 
+                        ${year} as season 
+                    FROM player_stats_season_${year} 
+                    WHERE 
+                        player_id = ? 
+                        AND season_type = 'REG'`; 
+            }
+        )
+        .join('\nUNION ALL ');
+
+        const playerInfoQuery = `
+            SELECT 
+                player_id, player_display_name, position, 
+                recent_team, headshot_url, season,
+                ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY season DESC) as rn 
+            FROM (${playerInfoUnionQueries}) 
+            ORDER BY season DESC`;
+
+        const queryParams = Array(years.length).fill(playerId);
+        const playerInfo = await db_conn.get(playerInfoQuery, queryParams);
+        if (!playerInfo) {
+            const errMsg = `No player data found for player id: ${playerId}`;
+            console.error(errMsg);
+            return res.status(404).json({error:errMsg});
+        }
+
+        const seasonsUnionQueries = years.map((year) => {
+                return `
+                    SELECT ${year} as season 
+                    FROM player_stats_season_${year} 
+                    WHERE player_id = ? AND season_type = 'REG'`
+            }
+        )
+        .join('\nUNION ALL ');
+        
+        const seasonsQuery = `
+            SELECT DISTINCT season 
+            FROM (${seasonsUnionQueries})
+            ORDER BY season DESC`;
+
+        const seasonQueryParams = Array(years.length).fill(playerId);
+        const seasonsResult = await db_conn.all(seasonsQuery, seasonQueryParams);
+        const seasons = seasonsResult.map((s: { season: number }) => s.season);
+
+        // Default to the most recent season if not specified
+        const targetSeason = season || (seasons.length > 0 ? seasons[0] : null);
+
+        // If no valid season is found, return just the bare minimum player info
+        if (!targetSeason) {
+            return res.json({
+                playerInfo,
+                seasons,
+                stats: null,
+                percentiles: null
+            });
+        }
+
+        // Get player stats for the resolved target season
+        const statsQuery = `SELECT * FROM player_stats_season_${targetSeason} WHERE player_id = ? AND season_type = 'REG'`;
+        const playerStats = await db_conn.get(statsQuery, [playerId]);
+
+        // If player stats for the given season exist, calculate the percentiles
+        let percentileStats = null;
+        if (playerStats) {
+            const position = playerStats.position;
+            const positionStats = getStatsForPositionPercentile(position)
+            if (positionStats.length > 0) {
+                percentileStats = await calculatePercentiles(db_conn, playerStats, position, targetSeason, positionStats);
+            }
+        }
+
+        const columnsToQuery = ['season', 'recent_team', 'games', 'completions', 'attempts', 'passing_air_yards', 'passing_yards', 
+            'passing_epa', 'passing_tds', 'comp_pct', 'sack_rate', 'rushing_epa', 'rushing_yards', 'receiving_epa', 'receiving_yards', 'target_share', 
+            'air_yards_share', 'racr', 'wopr', 'total_turnovers', 'fantasy_points_ppr', 'receptions', 'targets', 'receiving_tds', 'receiving_yards_after_catch', 
+            'carries', 'rushing_tds', 'yac_pct', 'yards_per_carry', 'yards_per_target', 'interceptions'];
+      
+        // Get career stats for all seasons
+        const careerStatsUnionQueries = years
+            .map(
+                (year) =>
+                `SELECT ${columnsToQuery.join(', ')} FROM player_stats_season_${year} WHERE player_id = ? AND season_type = 'REG'`
+            )
+            .join('\nUNION ALL ');
+        const careerStatsQuery = `SELECT ${columnsToQuery.join(', ')} FROM (${careerStatsUnionQueries}) ORDER BY season DESC`;
+    
+        const careerStatsQueryParams = Array(years.length).fill(playerId);
+        const careerStats = await db_conn.all(careerStatsQuery, careerStatsQueryParams);
+        return res.json({
+            playerInfo,
+            seasons,
+            stats: playerStats,
+            percentiles: percentileStats,
+            careerStats
+        })
+    } catch (error) {
+        const errMsg = "Unexpected error encountered while fetching player stats: " + error;
         console.error(errMsg);
         return res.status(500).json({error:errMsg});
     }
