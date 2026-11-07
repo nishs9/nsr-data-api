@@ -1,9 +1,9 @@
-import express, { type Express, type Request, type Response } from 'express';
+import express, { type Express } from 'express';
 import {initDb, getDbConn } from './init.ts';
-import { AVAILABLE_STATS, VALID_POSITIONS, STAT_QUALIFIERS, MID_SEASON_STAT_QUALIFIERS } from './utils/constants.ts';
 import type { ScatterPlotDataPoint, ScatterQueryResult } from './types/scatter-plot.ts';
-import { getStatsForPosition, getStatsForPositionPercentile } from "./types/player.js";
-import { calculatePercentiles } from './utils/helpers.ts';
+import type { AggregatedRow } from "./types/player.ts";
+import { calculatePercentiles, getStatsForPosition, getStatsForPositionPercentile, processAggregatedData } from './utils/helpers.ts';
+import { AVAILABLE_STATS, VALID_POSITIONS, STAT_QUALIFIERS, MID_SEASON_STAT_QUALIFIERS } from './utils/constants.ts';
 
 const port = process.env.PORT || 3000;
 const app: Express = express();
@@ -83,8 +83,8 @@ app.get('/api/search/:query', async (req, res) => {
 
 app.get('/api/power-rankings', async (req, res) => {
     try {
-        const week = parseInt(String(req.query.week));
-        if (week) {
+        if (req.query.week) {
+            const week = Number(req.query.week);
             if (isNaN(week) || week < 1) {
                 const errMsg = "Invalid value passed in for week: " + week
                 console.error(errMsg);
@@ -130,7 +130,6 @@ app.get('/api/power-rankings', async (req, res) => {
             const latestRankings = await db_conn.all(rankingsQuery);
             return res.status(200).json({ rankings: latestRankings });
         }
-        
     } catch (error) {
         const errMsg = "Error encountered while fetching power rankings"
         console.error(errMsg, error)
@@ -186,24 +185,20 @@ app.get('/api/power-rankings/historical', async (req, res) => {
 
 app.get('/api/scatter-plot', async (req, res) => {
     try {
-        const season = Number(req.query.season);
-        const xStat = String(req.query.xStat);
-        const yStat = String(req.query.yStat);
-        let positions = String(req.query.positions);
-        if (positions === "undefined") {
-            positions = "QB";
-        }
-        console.log('req: ', req )
-        console.log("req.query: ", req.query)
-        console.log("raw inputs: ", req.query.season, req.query.xStat, req.query.yStat, req.query.positions);
-        console.log("inputs: ", season, xStat, yStat, positions);
-
         // Check for all required parameters in query string and
         // ensure they pass some simple validations
-        if (!season || !xStat || !yStat) {
+        if (!req.query.season || !req.query.xStat || !req.query.yStat) {
             const errMsg = "Missing one or more required parameters: {season, xStat, yStat}";
             console.error(errMsg);
             return res.status(400).json({error: errMsg});
+        }
+        const season = Number(req.query.season);
+        const xStat = String(req.query.xStat);
+        const yStat = String(req.query.yStat);
+
+        let positions = String(req.query.positions);
+        if (positions === "undefined") {
+            positions = "QB";
         }
 
         if (isNaN(season) || season < 1999 || season > 2026) {
@@ -295,16 +290,15 @@ app.get('/api/scatter-plot', async (req, res) => {
 app.get('/api/stats/comparison', async(req, res) => {
     try {
         console.log(req.query);
+        if (!req.query.position || !req.query.season || !req.query.statType) {
+            const errMsg = "Missing required parameters in payload: position, season, and/or statType";
+            console.error(errMsg);
+            return res.status(400).json({error:errMsg});
+        }
         const position = String(req.query.position);
         const season = Number(req.query.season);
         const statType = String(req.query.statType);
         const playerId = req.query.playerId;
-
-        if (!position || !season || !statType) {
-            const errMsg = "Missing required parameters in payload";
-            console.error(errMsg);
-            return res.status(400).json({error:errMsg});
-        }
 
         // Make sure DB table exists + some prep tasks before we query
         const tableName = `player_stats_season_${season}`;
@@ -380,21 +374,23 @@ app.get('/api/stats/comparison', async(req, res) => {
 
 app.get('/api/player/:playerId', async (req, res) => {
     try {
+        if (!req.params.playerId) {
+            const errMsg = "Player ID is a require parameters!"
+            console.error(errMsg);
+            return res.status(400).json({error:errMsg});
+        }
         const playerId = req.params.playerId;
-        let season = Number(req.query.season);
 
-        if (!playerId) {
-            const errMsg = "Player ID is a required parameter!"
-            console.error(errMsg);
-            return res.status(400).json({error:errMsg});
+        let season: number = NaN;
+        if (req.query.season) {
+            season = Number(req.query.season);
+            if (season > 2026 || season < 1999) {
+                const errMsg = "Season should be between 1999-2026. Not: " + season;
+                console.error(errMsg);
+                return res.status(400).json({error:errMsg});
+            }
         }
-
-        if (season && (season > 2026 || season < 1999)) {
-            const errMsg = "Season should be between 1999-2026. Not: " + season;
-            console.error(errMsg);
-            return res.status(400).json({error:errMsg});
-        }
-
+        
         const years = Array.from({ length: 2026 - 1999 + 1 }, (_, i) => 2026 - i);
         const playerInfoUnionQueries = years.map( (year) => { 
                 return `
@@ -499,4 +495,131 @@ app.get('/api/player/:playerId', async (req, res) => {
         console.error(errMsg);
         return res.status(500).json({error:errMsg});
     }
+});
+
+app.get('/api/player/:playerId/pass-map', async (req, res) => {
+    if (!req.params.playerId || !req.query.season) {
+        const errMsg = "Player ID and Season are required inputs!";
+        console.error(errMsg);
+        return res.status(400).json({error:errMsg});
+    }
+    const playerId = String(req.params.playerId);
+    const season = Number(req.query.season);
+    if (season < 2010 || season > 2026) {
+        const errMsg = "Pass maps are only available from 2010 to the present day. You passed in " + season;
+        console.error(errMsg);
+        return res.status(400).json({error:errMsg});
+    }
+    
+    let startWeek: number | null = null;
+    let endWeek: number | null = null;
+    if (req.query.weekStart) {
+        startWeek = Number(req.query.weekStart);
+        if (isNaN(startWeek) || startWeek < 1 || startWeek > 18) {
+            const errMsg = "Starting week must be a number and between 1 and 18 (inclusive)!";
+            console.error(errMsg);
+            return res.status(400).json({error:errMsg});
+        }
+    }
+    if (req.query.weekEnd) {
+        endWeek = Number(req.query.weekEnd);
+        if (isNaN(endWeek) || endWeek < 1 || endWeek > 18) {
+            const errMsg = "Ending week must be a number and between 1 and 18 (inclusive)!";
+            console.error(errMsg);
+            return res.status(400).json({error:errMsg});
+        }
+    }
+    if (startWeek !== null && endWeek !== null && startWeek > endWeek) {
+        const errMsg = `Starting week should be less than the end week: Start: ${startWeek} // End: ${endWeek}`;
+        console.error(errMsg);
+        return res.status(400).json({error:errMsg});
+    }
+
+    try {
+        // Validate that we have a play-by-play table available
+        // for the given season
+        const tableExistsQuery = `
+            SELECT name from sqlite_master
+            WHERE type='table' AND name=?
+        `;
+        const tableExists = await db_conn.get(tableExistsQuery, [`play_by_play_${season}`]);
+        if (!tableExists) {
+            const errMsg = "Play-by-play data not available for " + season;
+            console.error(errMsg);
+            return res.status(404).json({error:errMsg});
+        }
+    } catch (error) {
+        const errMsg = "Encountered an unexpected error while checking table existence: " + error;
+        console.error(errMsg);
+        return res.status(500).json({error:errMsg});
+    }
+
+    // Construct the pass map query
+    const whereConditions = [
+        "play_type = 'pass'",
+        "passer_player_id = ?",
+        "season_type = 'REG'",
+        "pass_location IS NOT NULL",
+        "air_yards IS NOT NULL"
+    ];
+    const queryParams: (string | number)[] = [playerId];
+
+    // Account for week bounds if they were passed in the request
+    if (startWeek !== null && endWeek !== null) {
+        whereConditions.push("week >= ? AND week <= ?");
+        queryParams.push(startWeek, endWeek);
+    } else if (startWeek !== null) {
+        whereConditions.push("week >= ?");
+        queryParams.push(startWeek);
+    } else if (endWeek !== null) {
+        whereConditions.push("week <= ?");
+        queryParams.push(endWeek);
+    }
+
+    const query = `
+      SELECT 
+        CASE 
+          WHEN air_yards <= 5 THEN 'short'
+          WHEN air_yards <= 10 THEN 'medium'
+          WHEN air_yards <= 15 THEN 'medium_long'
+          ELSE 'long'
+        END as distance_category,
+        LOWER(pass_location) as location_category,
+        SUM(CASE WHEN complete_pass = 1 THEN 1 ELSE 0 END) as completions,
+        COUNT(CASE WHEN pass_attempt = 1 AND sack = 0 THEN 1 END) as attempts,
+        SUM(CASE WHEN pass_attempt = 1 AND sack = 0 THEN COALESCE(air_yards, 0) ELSE 0 END) as air_yards,
+        SUM(CASE WHEN pass_attempt = 1 AND sack = 0 THEN COALESCE(yards_gained, 0) ELSE 0 END) as passing_yards,
+        SUM(CASE WHEN pass_attempt = 1 AND sack = 0 THEN COALESCE(air_epa, 0) ELSE 0 END) as passing_air_epa,
+        SUM(CASE WHEN pass_attempt = 1 AND sack = 0 THEN COALESCE(qb_epa, 0) ELSE 0 END) as total_passing_epa,
+        SUM(CASE WHEN pass_touchdown = 1 THEN 1 ELSE 0 END) as touchdowns,
+        SUM(CASE WHEN interception = 1 THEN 1 ELSE 0 END) as interceptions
+      FROM play_by_play_${season}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY distance_category, location_category
+    `;
+
+    let aggregatedRows: AggregatedRow[];
+    let passMapData;
+    let totalPlays;
+    try {
+        aggregatedRows = await db_conn.all(query, queryParams) as AggregatedRow[];
+        passMapData = processAggregatedData(aggregatedRows);
+        totalPlays = aggregatedRows.reduce((sum, row) => sum + row.attempts, 0);
+    } catch (queryError) {
+        const errMsg = "Error encountered while querying + processing pbp data: " + queryError;
+        console.error(errMsg);
+        return res.status(500).json({error:errMsg});
+    }
+
+    return res.status(200).json({
+        passMapData,
+        season,
+        totalPlays,
+        weekStart: startWeek,
+        weekEnd: endWeek
+    });
+});
+
+app.get('/api/player/:playerId/game-logs', async (req, res) => {
+
 });
