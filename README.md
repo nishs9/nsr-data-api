@@ -22,8 +22,9 @@ docker run --rm --name nsr-data-api -p <-PORT->:<-PORT-> --env-file <local env f
 ## Progress
 
 - [x] Basic server setup and containerization
-- [ ] _{in progress}_ Migrate all of the nfl-stats-radar API routes from Next.js layer to here
+- [x] Migrate all of the nfl-stats-radar API routes from Next.js layer to here
 - [ ] Implement the API key logic (generation, maintenance, persistence, rotation, etc.)
+- [ ] *{in progress}* Work on some general security and performance enhancements
 - [ ] Deploy the API to Railway
 - [ ] Test local nfl-stats-radar instance connected to hosted Data API instance
 - [ ] Test prod/PR instance of nfl-stats-radar with hosted Data API instance
@@ -35,6 +36,7 @@ docker run --rm --name nsr-data-api -p <-PORT->:<-PORT-> --env-file <local env f
 MIT
 
 ## References
+
 The data that NFL Stats Radar relies on comes from a public repo provided by nflverse. I use the player season stats data specifically for this project but the repo has even more detailed data from current and past seasons. All of this data can be accessed and downloaded from [here](https://github.com/nflverse/nflverse-data/releases).
 
 Here is a link to nflverse's main GitHub page as well: https://github.com/nflverse

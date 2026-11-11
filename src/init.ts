@@ -2,6 +2,8 @@ import { S3Client, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s
 import fs from 'fs';
 import path from 'path';
 import { Readable } from 'stream';
+import { pipeline } from 'stream/promises';
+import { ReadableStream } from 'stream/web';
 import sqlite3 from 'sqlite3';
 import { open, type Database } from 'sqlite';
 
@@ -90,15 +92,20 @@ export async function initDb(): Promise<void> {
             });
 
             const getResponse = await client.send(getCommand);
-            if (getResponse.Body) {
-                const buffer = await streamToBuffer(getResponse.Body as Readable);
+            const responseBody = getResponse.Body;
+            if (responseBody) {
+                const dbStream = responseBody instanceof Readable 
+                    ? responseBody 
+                    : Readable.fromWeb(responseBody as ReadableStream);
 
-                const dbDir = path.dirname(DB_PATH);
-                if (!fs.existsSync(dbDir)) {
-                    fs.mkdirSync(dbDir, { recursive: true });
+                await pipeline(dbStream, fs.createWriteStream(TMP_DB_PATH));
+
+                if (getResponse.ContentLength != null &&
+                    fs.statSync(TMP_DB_PATH).size !== getResponse.ContentLength) {
+                        throw new Error("Downloaded DB from R2 did not match ContentLength!");
                 }
 
-                fs.writeFileSync(DB_PATH, buffer);
+                fs.renameSync(TMP_DB_PATH, DB_PATH);
 
                 if (remoteLastModified === undefined && remoteETag === undefined) {
                     throw new Error("Missing LastModified and ETag from R2 response");
@@ -115,7 +122,7 @@ export async function initDb(): Promise<void> {
         }
     } catch (error) {
         console.error("Error downloading DB file:", error);
-        if (hasLocalDbFile) {
+        if (fs.existsSync(DB_PATH)) {
             console.log("Using local DB file since there was an error downloading from R2");
             return;
         }
