@@ -137,6 +137,23 @@ app.get('/api/power-rankings', async (req, res) => {
     }
 });
 
+app.get('/api/power-rankings/weeks', async(req, res) => {
+    try {
+        const query = `
+            SELECT DISTINCT week
+            FROM historical_rpi_data
+            ORDER BY week DESC
+        `;
+        const weeks = db_conn.all(query);
+        const weekNumbers = (await weeks).map((row: {week: number}) => row.week);
+        return res.status(200).json({weeks: weekNumbers})
+    } catch (error) {
+        const errMsg = "Error fetching available weeks for power rankings page: " + error;
+        console.error(errMsg);
+        return res.status(500).json({error:errMsg});
+    }
+}); 
+
 app.get('/api/power-rankings/historical', async (req, res) => {
     try {
         const rawTeams = req.query.teams;
@@ -653,7 +670,8 @@ app.get('/api/player/:playerId/game-logs', async (req, res) => {
             SELECT ${GAME_LOG_QUERY_COLUMNS.join(', ')} 
             FROM player_stats_week_${season} 
             WHERE player_id = ? AND season_type = 'REG'
-            ORDER BY week DESC`;
+            ORDER BY week DESC
+        `;
         
         const gameLogs = await db_conn.all(query, [playerId]);
         
