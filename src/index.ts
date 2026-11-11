@@ -3,7 +3,7 @@ import {initDb, getDbConn } from './init.ts';
 import type { ScatterPlotDataPoint, ScatterQueryResult } from './types/scatter-plot.ts';
 import type { AggregatedRow } from "./types/player.ts";
 import { calculatePercentiles, getStatsForPosition, getStatsForPositionPercentile, processAggregatedData } from './utils/helpers.ts';
-import { AVAILABLE_STATS, VALID_POSITIONS, STAT_QUALIFIERS, MID_SEASON_STAT_QUALIFIERS } from './utils/constants.ts';
+import { AVAILABLE_STATS, VALID_POSITIONS, STAT_QUALIFIERS, MID_SEASON_STAT_QUALIFIERS, GAME_LOG_QUERY_COLUMNS } from './utils/constants.ts';
 
 const port = process.env.PORT || 3000;
 const app: Express = express();
@@ -505,6 +505,11 @@ app.get('/api/player/:playerId/pass-map', async (req, res) => {
     }
     const playerId = String(req.params.playerId);
     const season = Number(req.query.season);
+    if (isNaN(season)) {
+        const errMsg = "The season parameter needs to be a valid year";
+        console.error(errMsg);
+        return res.status(400).json({error:errMsg});
+    }
     if (season < 2010 || season > 2026) {
         const errMsg = "Pass maps are only available from 2010 to the present day. You passed in " + season;
         console.error(errMsg);
@@ -621,5 +626,54 @@ app.get('/api/player/:playerId/pass-map', async (req, res) => {
 });
 
 app.get('/api/player/:playerId/game-logs', async (req, res) => {
+    try {
+        if (!req.params.playerId) {
+            const errMsg = "Player ID is a required input!"
+            console.error(errMsg);
+            return res.status(400).json({error:errMsg});
+        }
+        const playerId = req.params.playerId;
 
+        let season: number = NaN;
+        if (req.query.season) {
+            season = Number(req.query.season);
+            if (isNaN(season)) {
+                const errMsg = "The season parameter needs to be a valid year";
+                console.error(errMsg);
+                return res.status(400).json({error:errMsg});
+            }
+            if (season > 2026 || season < 1999) {
+                const errMsg = "Season should be between 1999-2026. Not: " + season;
+                console.error(errMsg);
+                return res.status(400).json({error:errMsg});
+            }
+        }
+
+        const query = `
+            SELECT ${GAME_LOG_QUERY_COLUMNS.join(', ')} 
+            FROM player_stats_week_${season} 
+            WHERE player_id = ? AND season_type = 'REG'
+            ORDER BY week DESC`;
+        
+        const gameLogs = await db_conn.all(query, [playerId]);
+        
+        if (!gameLogs || gameLogs.length === 0) {
+            const errMsg = `No game logs found for ${playerId} in ${season}`
+            console.error(errMsg);
+            return res.status(404).json({
+                gameLogs: [],
+                season,
+                message: errMsg
+            });
+        }
+        
+        return res.status(200).json({
+            gameLogs,
+            season
+        });
+    } catch (error) {
+        const errMsg = "Encountered an unexpected error while retrieving player game logs: " + error;
+        console.error(errMsg);
+        return res.status(500).json({error:errMsg});
+    }
 });
