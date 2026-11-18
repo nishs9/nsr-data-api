@@ -6,34 +6,25 @@ import { pipeline } from 'stream/promises';
 import { ReadableStream } from 'stream/web';
 import sqlite3 from 'sqlite3';
 import { open, type Database } from 'sqlite';
+import { pathToFileURL } from 'node:url';
 
+const DB_DIR = "db/";
 const DB_PATH = path.join(process.cwd(), 'db', 'nfl_stats.db');
 const TMP_DB_PATH = `${DB_PATH}.tmp`;
 const CACHE_FILE = path.join(process.cwd(), 'db', '.db_cache_info');
 
-let connectionPromise: Promise<Database> | undefined
-
 export function getDbConn(): Promise<Database> {
-    connectionPromise ??= open({
-        filename: DB_PATH,
+    let connectionPromise = open({
+        filename: `${pathToFileURL(DB_PATH).href}?immutable=1`,
         driver: sqlite3.Database,
-        mode: sqlite3.OPEN_READONLY,
+        mode: sqlite3.OPEN_READONLY | sqlite3.OPEN_URI,
     });
-
     return connectionPromise;
 }
 
 interface CacheInfo {
     lastModified: string;
     etag: string;
-}
-
-async function streamToBuffer(stream: Readable): Promise<Buffer> {
-    const chunks: Buffer[] = [];
-    for await (const chunk of stream) {
-        chunks.push(Buffer.from(chunk));
-    }
-    return Buffer.concat(chunks);
 }
 
 export async function initDb(): Promise<void> {
@@ -79,12 +70,17 @@ export async function initDb(): Promise<void> {
             const cacheInfo: CacheInfo = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
             if (cacheInfo.lastModified === remoteLastModified && cacheInfo.etag === remoteETag) {
                 shouldDownload = false;
+                console.log("Existing, up-to-date DB found locally. Skipping download...");
             }
-            console.log("Existing, up-to-date DB found locally. Skipping download...")
         }
 
         if (shouldDownload) {
             console.log("Downloading updated DB file from R2");
+
+            if (!fs.existsSync(DB_DIR)) {
+                console.log("Setting up the database directory...")
+                fs.mkdirSync(DB_DIR);
+            }
 
             const getCommand = new GetObjectCommand({
                 Bucket: process.env.R2_BUCKET_NAME,
@@ -102,6 +98,7 @@ export async function initDb(): Promise<void> {
 
                 if (getResponse.ContentLength != null &&
                     fs.statSync(TMP_DB_PATH).size !== getResponse.ContentLength) {
+                        fs.rmSync(TMP_DB_PATH);
                         throw new Error("Downloaded DB from R2 did not match ContentLength!");
                 }
 
@@ -122,6 +119,9 @@ export async function initDb(): Promise<void> {
         }
     } catch (error) {
         console.error("Error downloading DB file:", error);
+        if (fs.existsSync(TMP_DB_PATH)) {
+            fs.rmSync(TMP_DB_PATH);
+        }
         if (fs.existsSync(DB_PATH)) {
             console.log("Using local DB file since there was an error downloading from R2");
             return;

@@ -11,20 +11,15 @@ const app: Express = express();
 app.use(express.json());
 
 await initDb();
-// TODO: Get rid of this shared connection this is just temporary 
-const db_conn = await getDbConn();
-await db_conn.get('SELECT 1');
-
-app.listen(port, () => {
-    console.log('Server is running on port ' + port);
-});
 
 app.get('/', async (req, res) => {
     return res.status(200).send('Welcome to the nfl-stats-radar Data API!');
 });
 
 app.get('/api/search/:query', async (req, res) => {
+    let db_conn;
     try {
+        db_conn = await getDbConn();
         const searchTerm = req.params.query;
         console.log('The search term was: ' + searchTerm)
 
@@ -78,11 +73,17 @@ app.get('/api/search/:query', async (req, res) => {
     } catch (error) {
         console.error("Player search errored out for an unexpected reason" + error)
         return res.status(500).json({error: 'Player search errored out for an unexpected reason!'})
+    } finally {
+        if (db_conn) {
+            await db_conn.close();
+        }
     }
 });
 
 app.get('/api/power-rankings', async (req, res) => {
+    let db_conn;
     try {
+        db_conn = await getDbConn();
         if (req.query.week) {
             const week = Number(req.query.week);
             if (isNaN(week) || week < 1) {
@@ -134,11 +135,17 @@ app.get('/api/power-rankings', async (req, res) => {
         const errMsg = "Error encountered while fetching power rankings"
         console.error(errMsg, error)
         return res.status(500).json({ error: errMsg })
+    } finally {
+        if (db_conn) {
+            await db_conn.close();
+        }
     }
 });
 
 app.get('/api/power-rankings/weeks', async(req, res) => {
+    let db_conn;
     try {
+        db_conn = await getDbConn();
         const query = `
             SELECT DISTINCT week
             FROM historical_rpi_data
@@ -151,11 +158,17 @@ app.get('/api/power-rankings/weeks', async(req, res) => {
         const errMsg = "Error fetching available weeks for power rankings page: " + error;
         console.error(errMsg);
         return res.status(500).json({error:errMsg});
+    } finally {
+        if (db_conn) {
+            await db_conn.close();
+        }
     }
 }); 
 
 app.get('/api/power-rankings/historical', async (req, res) => {
+    let db_conn;
     try {
+        db_conn = await getDbConn();
         const rawTeams = req.query.teams;
         console.log(rawTeams)
         if (!rawTeams) {
@@ -175,6 +188,10 @@ app.get('/api/power-rankings/historical', async (req, res) => {
             const errMsg = "Error while parsing team input";
             console.error(errMsg);
             return res.status(400).json({ error: errMsg })
+        } else if (teams.length > 32) {
+            const errMsg = "Invalid team input"
+            console.error(errMsg);
+            return res.status(400).json({error:errMsg});
         }
 
         const teamPlaceholders = teams.map(() => '?').join(',');
@@ -197,11 +214,18 @@ app.get('/api/power-rankings/historical', async (req, res) => {
         const errMsg = "Encountered an unexpected error while fetching historical RPI rankings!";
         console.error(errMsg, error);
         return res.status(500).json({ error: errMsg });
+    } finally {
+        if (db_conn) {
+            await db_conn.close();
+        }
     }
 });  
 
 app.get('/api/scatter-plot', async (req, res) => {
+    let db_conn;
     try {
+        db_conn = await getDbConn();
+
         // Check for all required parameters in query string and
         // ensure they pass some simple validations
         if (!req.query.season || !req.query.xStat || !req.query.yStat) {
@@ -301,11 +325,17 @@ app.get('/api/scatter-plot', async (req, res) => {
     } catch (error) {
         console.error("Error in scatter plot API: ", error);
         return res.status(500).json({error: "Internal server error"});
+    } finally {
+        if (db_conn) {
+            await db_conn.close();
+        }
     }
 });
 
 app.get('/api/stats/comparison', async(req, res) => {
+    let db_conn;
     try {
+        db_conn = await getDbConn();
         console.log(req.query);
         if (!req.query.position || !req.query.season || !req.query.statType) {
             const errMsg = "Missing required parameters in payload: position, season, and/or statType";
@@ -386,11 +416,17 @@ app.get('/api/stats/comparison', async(req, res) => {
         const errMsg = "Unexpected error encountered while fetching player stat comparison: " + error;
         console.error(errMsg);
         return res.status(500).json({error:errMsg});
+    } finally {
+        if (db_conn) {
+            await db_conn.close();
+        }
     }
 });
 
 app.get('/api/player/:playerId', async (req, res) => {
+    let db_conn;
     try {
+        db_conn = await getDbConn();
         if (!req.params.playerId) {
             const errMsg = "Player ID is a require parameters!"
             console.error(errMsg);
@@ -511,139 +547,157 @@ app.get('/api/player/:playerId', async (req, res) => {
         const errMsg = "Unexpected error encountered while fetching player stats: " + error;
         console.error(errMsg);
         return res.status(500).json({error:errMsg});
+    } finally {
+        if (db_conn) {
+            await db_conn.close();
+        }
     }
 });
 
 app.get('/api/player/:playerId/pass-map', async (req, res) => {
-    if (!req.params.playerId || !req.query.season) {
-        const errMsg = "Player ID and Season are required inputs!";
-        console.error(errMsg);
-        return res.status(400).json({error:errMsg});
-    }
-    const playerId = String(req.params.playerId);
-    const season = Number(req.query.season);
-    if (isNaN(season)) {
-        const errMsg = "The season parameter needs to be a valid year";
-        console.error(errMsg);
-        return res.status(400).json({error:errMsg});
-    }
-    if (season < 2010 || season > 2026) {
-        const errMsg = "Pass maps are only available from 2010 to the present day. You passed in " + season;
-        console.error(errMsg);
-        return res.status(400).json({error:errMsg});
-    }
-    
-    let startWeek: number | null = null;
-    let endWeek: number | null = null;
-    if (req.query.weekStart) {
-        startWeek = Number(req.query.weekStart);
-        if (isNaN(startWeek) || startWeek < 1 || startWeek > 18) {
-            const errMsg = "Starting week must be a number and between 1 and 18 (inclusive)!";
-            console.error(errMsg);
-            return res.status(400).json({error:errMsg});
-        }
-    }
-    if (req.query.weekEnd) {
-        endWeek = Number(req.query.weekEnd);
-        if (isNaN(endWeek) || endWeek < 1 || endWeek > 18) {
-            const errMsg = "Ending week must be a number and between 1 and 18 (inclusive)!";
-            console.error(errMsg);
-            return res.status(400).json({error:errMsg});
-        }
-    }
-    if (startWeek !== null && endWeek !== null && startWeek > endWeek) {
-        const errMsg = `Starting week should be less than the end week: Start: ${startWeek} // End: ${endWeek}`;
-        console.error(errMsg);
-        return res.status(400).json({error:errMsg});
-    }
-
+    let db_conn;
     try {
-        // Validate that we have a play-by-play table available
-        // for the given season
-        const tableExistsQuery = `
-            SELECT name from sqlite_master
-            WHERE type='table' AND name=?
+        db_conn = await getDbConn();
+        if (!req.params.playerId || !req.query.season) {
+            const errMsg = "Player ID and Season are required inputs!";
+            console.error(errMsg);
+            return res.status(400).json({error:errMsg});
+        }
+        const playerId = String(req.params.playerId);
+        const season = Number(req.query.season);
+        if (isNaN(season)) {
+            const errMsg = "The season parameter needs to be a valid year";
+            console.error(errMsg);
+            return res.status(400).json({error:errMsg});
+        }
+        if (season < 2010 || season > 2026) {
+            const errMsg = "Pass maps are only available from 2010 to the present day. You passed in " + season;
+            console.error(errMsg);
+            return res.status(400).json({error:errMsg});
+        }
+        
+        let startWeek: number | null = null;
+        let endWeek: number | null = null;
+        if (req.query.weekStart) {
+            startWeek = Number(req.query.weekStart);
+            if (isNaN(startWeek) || startWeek < 1 || startWeek > 18) {
+                const errMsg = "Starting week must be a number and between 1 and 18 (inclusive)!";
+                console.error(errMsg);
+                return res.status(400).json({error:errMsg});
+            }
+        }
+        if (req.query.weekEnd) {
+            endWeek = Number(req.query.weekEnd);
+            if (isNaN(endWeek) || endWeek < 1 || endWeek > 18) {
+                const errMsg = "Ending week must be a number and between 1 and 18 (inclusive)!";
+                console.error(errMsg);
+                return res.status(400).json({error:errMsg});
+            }
+        }
+        if (startWeek !== null && endWeek !== null && startWeek > endWeek) {
+            const errMsg = `Starting week should be less than the end week: Start: ${startWeek} // End: ${endWeek}`;
+            console.error(errMsg);
+            return res.status(400).json({error:errMsg});
+        }
+
+        try {
+            // Validate that we have a play-by-play table available
+            // for the given season
+            const tableExistsQuery = `
+                SELECT name from sqlite_master
+                WHERE type='table' AND name=?
+            `;
+            const tableExists = await db_conn.get(tableExistsQuery, [`play_by_play_${season}`]);
+            if (!tableExists) {
+                const errMsg = "Play-by-play data not available for " + season;
+                console.error(errMsg);
+                return res.status(404).json({error:errMsg});
+            }
+        } catch (error) {
+            const errMsg = "Encountered an unexpected error while checking table existence: " + error;
+            console.error(errMsg);
+            return res.status(500).json({error:errMsg});
+        }
+
+        // Construct the pass map query
+        const whereConditions = [
+            "play_type = 'pass'",
+            "passer_player_id = ?",
+            "season_type = 'REG'",
+            "pass_location IS NOT NULL",
+            "air_yards IS NOT NULL"
+        ];
+        const queryParams: (string | number)[] = [playerId];
+
+        // Account for week bounds if they were passed in the request
+        if (startWeek !== null && endWeek !== null) {
+            whereConditions.push("week >= ? AND week <= ?");
+            queryParams.push(startWeek, endWeek);
+        } else if (startWeek !== null) {
+            whereConditions.push("week >= ?");
+            queryParams.push(startWeek);
+        } else if (endWeek !== null) {
+            whereConditions.push("week <= ?");
+            queryParams.push(endWeek);
+        }
+
+        const query = `
+        SELECT 
+            CASE 
+            WHEN air_yards <= 5 THEN 'short'
+            WHEN air_yards <= 10 THEN 'medium'
+            WHEN air_yards <= 15 THEN 'medium_long'
+            ELSE 'long'
+            END as distance_category,
+            LOWER(pass_location) as location_category,
+            SUM(CASE WHEN complete_pass = 1 THEN 1 ELSE 0 END) as completions,
+            COUNT(CASE WHEN pass_attempt = 1 AND sack = 0 THEN 1 END) as attempts,
+            SUM(CASE WHEN pass_attempt = 1 AND sack = 0 THEN COALESCE(air_yards, 0) ELSE 0 END) as air_yards,
+            SUM(CASE WHEN pass_attempt = 1 AND sack = 0 THEN COALESCE(yards_gained, 0) ELSE 0 END) as passing_yards,
+            SUM(CASE WHEN pass_attempt = 1 AND sack = 0 THEN COALESCE(air_epa, 0) ELSE 0 END) as passing_air_epa,
+            SUM(CASE WHEN pass_attempt = 1 AND sack = 0 THEN COALESCE(qb_epa, 0) ELSE 0 END) as total_passing_epa,
+            SUM(CASE WHEN pass_touchdown = 1 THEN 1 ELSE 0 END) as touchdowns,
+            SUM(CASE WHEN interception = 1 THEN 1 ELSE 0 END) as interceptions
+        FROM play_by_play_${season}
+        WHERE ${whereConditions.join(' AND ')}
+        GROUP BY distance_category, location_category
         `;
-        const tableExists = await db_conn.get(tableExistsQuery, [`play_by_play_${season}`]);
-        if (!tableExists) {
-            const errMsg = "Play-by-play data not available for " + season;
+
+        let aggregatedRows: AggregatedRow[];
+        let passMapData;
+        let totalPlays;
+        try {
+            aggregatedRows = await db_conn.all(query, queryParams) as AggregatedRow[];
+            passMapData = processAggregatedData(aggregatedRows);
+            totalPlays = aggregatedRows.reduce((sum, row) => sum + row.attempts, 0);
+        } catch (queryError) {
+            const errMsg = "Error encountered while querying + processing pbp data: " + queryError;
             console.error(errMsg);
-            return res.status(404).json({error:errMsg});
+            return res.status(500).json({error:errMsg});
         }
+
+        return res.status(200).json({
+            passMapData,
+            season,
+            totalPlays,
+            weekStart: startWeek,
+            weekEnd: endWeek
+        });
     } catch (error) {
-        const errMsg = "Encountered an unexpected error while checking table existence: " + error;
+        const errMsg = "Unexpected error encountered while fetching pass map: " + error;
         console.error(errMsg);
         return res.status(500).json({error:errMsg});
+    } finally {
+        if (db_conn) {
+            await db_conn.close();
+        }
     }
-
-    // Construct the pass map query
-    const whereConditions = [
-        "play_type = 'pass'",
-        "passer_player_id = ?",
-        "season_type = 'REG'",
-        "pass_location IS NOT NULL",
-        "air_yards IS NOT NULL"
-    ];
-    const queryParams: (string | number)[] = [playerId];
-
-    // Account for week bounds if they were passed in the request
-    if (startWeek !== null && endWeek !== null) {
-        whereConditions.push("week >= ? AND week <= ?");
-        queryParams.push(startWeek, endWeek);
-    } else if (startWeek !== null) {
-        whereConditions.push("week >= ?");
-        queryParams.push(startWeek);
-    } else if (endWeek !== null) {
-        whereConditions.push("week <= ?");
-        queryParams.push(endWeek);
-    }
-
-    const query = `
-      SELECT 
-        CASE 
-          WHEN air_yards <= 5 THEN 'short'
-          WHEN air_yards <= 10 THEN 'medium'
-          WHEN air_yards <= 15 THEN 'medium_long'
-          ELSE 'long'
-        END as distance_category,
-        LOWER(pass_location) as location_category,
-        SUM(CASE WHEN complete_pass = 1 THEN 1 ELSE 0 END) as completions,
-        COUNT(CASE WHEN pass_attempt = 1 AND sack = 0 THEN 1 END) as attempts,
-        SUM(CASE WHEN pass_attempt = 1 AND sack = 0 THEN COALESCE(air_yards, 0) ELSE 0 END) as air_yards,
-        SUM(CASE WHEN pass_attempt = 1 AND sack = 0 THEN COALESCE(yards_gained, 0) ELSE 0 END) as passing_yards,
-        SUM(CASE WHEN pass_attempt = 1 AND sack = 0 THEN COALESCE(air_epa, 0) ELSE 0 END) as passing_air_epa,
-        SUM(CASE WHEN pass_attempt = 1 AND sack = 0 THEN COALESCE(qb_epa, 0) ELSE 0 END) as total_passing_epa,
-        SUM(CASE WHEN pass_touchdown = 1 THEN 1 ELSE 0 END) as touchdowns,
-        SUM(CASE WHEN interception = 1 THEN 1 ELSE 0 END) as interceptions
-      FROM play_by_play_${season}
-      WHERE ${whereConditions.join(' AND ')}
-      GROUP BY distance_category, location_category
-    `;
-
-    let aggregatedRows: AggregatedRow[];
-    let passMapData;
-    let totalPlays;
-    try {
-        aggregatedRows = await db_conn.all(query, queryParams) as AggregatedRow[];
-        passMapData = processAggregatedData(aggregatedRows);
-        totalPlays = aggregatedRows.reduce((sum, row) => sum + row.attempts, 0);
-    } catch (queryError) {
-        const errMsg = "Error encountered while querying + processing pbp data: " + queryError;
-        console.error(errMsg);
-        return res.status(500).json({error:errMsg});
-    }
-
-    return res.status(200).json({
-        passMapData,
-        season,
-        totalPlays,
-        weekStart: startWeek,
-        weekEnd: endWeek
-    });
 });
 
 app.get('/api/player/:playerId/game-logs', async (req, res) => {
+    let db_conn;
     try {
+        db_conn = await getDbConn();
         if (!req.params.playerId) {
             const errMsg = "Player ID is a required input!"
             console.error(errMsg);
@@ -693,5 +747,18 @@ app.get('/api/player/:playerId/game-logs', async (req, res) => {
         const errMsg = "Encountered an unexpected error while retrieving player game logs: " + error;
         console.error(errMsg);
         return res.status(500).json({error:errMsg});
+    } finally {
+        if (db_conn) {
+            await db_conn.close();
+        }
     }
+});
+
+const server = app.listen(port, () => {
+    console.log('Server is running on port ' + port);
+});
+
+process.on('SIGTERM', () => {
+    console.log("SIGTERM signal received; shutting down server");
+    server.close();
 });
