@@ -6,7 +6,7 @@
   "main": "index.ts",
   "scripts": {
     "dev": "npx tsx --env-file=.env.local --watch src/index.ts",
-    "start": "npx tsx src/index.ts",
+    "start": "node src/index.ts",
     "lint": "tsc --noEmit",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

@@ -21,7 +21,12 @@ app.get('/api/search/:query', async (req, res) => {
     try {
         db_conn = await getDbConn();
         const searchTerm = req.params.query;
+        if (searchTerm.length > 100) {
+            return res.status(500).json({error: 'Invalid search term'})
+        } 
         console.log('The search term was: ' + searchTerm)
+
+        const escapedSearchTerm = searchTerm.replace(/[\\%_]/g, (ch) => '\\' + ch);
 
         // DB query to find players across all seasons, prioritizing most recent appearances
         const searchQuery = `
@@ -67,7 +72,7 @@ app.get('/api/search/:query', async (req, res) => {
 
         const playerSearch = await db_conn.all(
             searchQuery,
-            [`%${req.params.query}%`],
+            [`%${escapedSearchTerm}%`],
         )
         return res.json(playerSearch);
     } catch (error) {
