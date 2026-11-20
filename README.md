@@ -25,10 +25,10 @@ docker run --rm --name nsr-data-api -p <-PORT->:<-PORT-> --env-file <local env f
 - [x] Migrate all of the nfl-stats-radar API routes from Next.js layer to here
 - [x] Implement authentication on the data endpoints
 - [x] Work on some general security and performance enhancements
-- [ ] *{in progress}* Deploy the API to Railway
-- [ ] Test local nfl-stats-radar instance connected to hosted Data API instance
-- [ ] Test prod/PR instance of nfl-stats-radar with hosted Data API instance
-- [ ] Add request caching for popular players, teams, etc.
+- [x] Deploy the API to Railway
+- [x] Test local nfl-stats-radar instance connected to hosted Data API instance
+- [x] Test prod/PR instance of nfl-stats-radar with hosted Data API instance
+- [ ] *{in progress}* Add request caching for popular players, teams, etc.
 - [ ] Setup the nfl-simulation-engine side of the backend
 
 ## License
