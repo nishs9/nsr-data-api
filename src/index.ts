@@ -4,13 +4,38 @@ import type { ScatterPlotDataPoint, ScatterQueryResult } from './types/scatter-p
 import type { AggregatedRow } from "./types/player.ts";
 import { calculatePercentiles, getStatsForPosition, getStatsForPositionPercentile, processAggregatedData } from './utils/helpers.ts';
 import { AVAILABLE_STATS, VALID_POSITIONS, STAT_QUALIFIERS, MID_SEASON_STAT_QUALIFIERS, GAME_LOG_QUERY_COLUMNS } from './utils/constants.ts';
+import { timingSafeEqual } from 'node:crypto';
 
 const port = process.env.PORT || 3000;
 const app: Express = express();
 
-app.use(express.json());
-
 await initDb();
+
+app.use((req, res, next) => {
+    if (req.path === "/") {
+        return next();
+    }
+
+    const validApiKey = process.env.VALID_CLIENT_API_KEY;
+    if (!validApiKey) {
+        const errMsg = "API key is not configured";
+        console.error(errMsg);
+        return res.status(500).json({error:errMsg});
+    }
+    const rawAuthHeader = req.get("authorization");
+    if (!rawAuthHeader) {
+        console.error("Request is missing an authorization header!");
+        return res.status(401).json({error: "Unauthorized"})
+    }
+
+    const authHeader = Buffer.from(rawAuthHeader);
+    const validAuthHeader = Buffer.from(`Bearer ${validApiKey}`); 
+    if (authHeader.length !== validAuthHeader.length || !timingSafeEqual(authHeader, validAuthHeader)) {
+        console.error("Request contains invalid authoirzation");
+        return res.status(401).json({error: "Unauthorized"})
+    }
+    next();
+});
 
 app.get('/', async (req, res) => {
     return res.status(200).send('Welcome to the nfl-stats-radar Data API!');
